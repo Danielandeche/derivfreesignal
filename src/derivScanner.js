@@ -49,6 +49,11 @@ function initDerivScanner() {
             if (marketTicks[market].length > 25) {
                 marketTicks[market].shift();
             }
+            
+            // Log every 5 ticks to show progress
+            if (marketTicks[market].length % 5 === 0) {
+                console.log(`[DerivScanner] ${market}: ${marketTicks[market].length} ticks collected`);
+            }
         }
     });
 

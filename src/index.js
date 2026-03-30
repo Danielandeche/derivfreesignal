@@ -18,8 +18,8 @@ initDerivScanner();
 // 2. Setup the loop
 setInterval(evaluateMarketCycle, INTERVAL_MS);
 
-// Run first evaluation after enough ticks are collected (~40 seconds)
-setTimeout(evaluateMarketCycle, 40000);
+// Run first evaluation after enough ticks are collected (~60-90 seconds for WebSocket to receive data)
+setTimeout(evaluateMarketCycle, 90000);
 
 /**
  * Runs every X minutes. Scans 25 ticks of all markets, applies all 6 strategies,
@@ -33,6 +33,7 @@ function evaluateMarketCycle() {
     let bestSignal = null;
     let bestTicks = null;
     let highestScore = 0;
+    let hasEnoughTicks = false;
 
     activeMarkets.forEach(market => {
         const ticks = marketTicks[market];
@@ -42,6 +43,8 @@ function evaluateMarketCycle() {
             console.log(`  - [${market}] Skipping: Insufficient ticks (${ticks ? ticks.length : 0}/25)`);
             return;
         }
+        
+        hasEnoughTicks = true;
 
         // Apply all 6 scoring strategies
         const scores = evaluateAll(ticks);
@@ -72,6 +75,12 @@ function evaluateMarketCycle() {
     });
 
     console.log('---------------------------------------------------');
+    
+    if (!hasEnoughTicks) {
+        console.log(`[Core] ⏳ Waiting for ticks... (Minimum 25 required per market)`);
+        return;
+    }
+    
     if (highestScore >= MIN_CONFIDENCE_SCORE && bestSignal) {
         console.log(`[Core] 🚀 WINNER FOUND: ${bestSignal.market} -> ${bestSignal.type} (${highestScore.toFixed(0)}%)! Publishing...`);
         publishSignal(bestSignal, bestTicks);
