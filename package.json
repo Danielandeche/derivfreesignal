@@ -1,0 +1,15 @@
+{
+  "name": "deriv-tick-bot",
+  "version": "1.0.0",
+  "description": "Deriv Tick-Based Telegram Signal Bot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "ws": "^8.20.0"
+  }
+}
