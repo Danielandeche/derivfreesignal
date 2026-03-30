@@ -18,8 +18,8 @@ initDerivScanner();
 // 2. Setup the loop
 setInterval(evaluateMarketCycle, INTERVAL_MS);
 
-// Also run immediately on startup after a short delay
-setTimeout(evaluateMarketCycle, 5000);
+// Run first evaluation after enough ticks are collected (~40 seconds)
+setTimeout(evaluateMarketCycle, 40000);
 
 /**
  * Runs every X minutes. Scans 25 ticks of all markets, applies all 6 strategies,
