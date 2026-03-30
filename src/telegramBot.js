@@ -1,6 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
 
-// Setup Bot (Polling mode disabled since we only send messages)
 const token = process.env.TELEGRAM_BOT_TOKEN;
 let bot = null;
 
@@ -12,9 +11,14 @@ if (token) {
 
 const chatId = process.env.TELEGRAM_CHAT_ID;
 
+// Track message history for deletion
+const signalHistory = {
+    messageIds: [],
+    maxHistory: 2, // Keep only last message visible
+};
+
 /**
  * Format Market Name
- * @param {string} symbol e.g., 'R_100'
  */
 function getMarketName(symbol) {
     const map = {
@@ -28,55 +32,126 @@ function getMarketName(symbol) {
 }
 
 /**
- * Publishes top signal to Telegram Channel
- * @param {Object} signal 
+ * Delete old messages (keep only last message visible)
  */
-function publishSignal(signal) {
+async function deleteOldMessages() {
+    if (signalHistory.messageIds.length >= signalHistory.maxHistory) {
+        const oldMessageId = signalHistory.messageIds.shift();
+        
+        if (bot && chatId) {
+            try {
+                await bot.deleteMessage(chatId, oldMessageId);
+                console.log(`[Telegram] Deleted old message: ${oldMessageId}`);
+            } catch (err) {
+                console.warn(`[Telegram] Could not delete message ${oldMessageId}: ${err.message}`);
+            }
+        }
+    }
+}
+
+/**
+ * Get last 10 digits and count for display
+ */
+function getDigitStats(ticks) {
+    const digits = ticks.map(t => parseInt(String(t.quote).split('').pop()));
+    const last10 = digits.slice(-10);
+    return {
+        digits: last10,
+        digitsStr: last10.join(','),
+        highCount: last10.filter(d => d >= 4).length,
+        lowCount: last10.filter(d => d <= 3).length
+    };
+}
+
+/**
+ * Format detailed signal message
+ */
+function formatSignal(signal, ticks) {
     const { market, type, score } = signal;
-
-    // Time Formatting
-    const timeOpts = { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hour12: true };
-    const entryTime = new Intl.DateTimeFormat('en-US', timeOpts).format(new Date());
-
-    // Reason Generator based on signal type
-    let reason = "High statistical probability detected.";
-    let basis = "Tick logic";
     
-    if (type === 'OVER_4' || type === 'UNDER_5') {
-        basis = "Digit imbalance reversal";
-        reason = "- High digit saturation detected\\n- Reversal pressure active\\n- Micro-momentum confirms entry";
-    } else if (type === 'EVEN' || type === 'ODD') {
-        basis = "Parity clustering anomaly";
-        reason = "- Strong parity clustering\\n- Recent ticks confirm heavy sequence\\n- Low alternation penalty";
-    } else if (type === 'RISE' || type === 'FALL') {
-        basis = "Tick momentum trend";
-        reason = "- Clean short-term tick momentum\\n- Micro-trend aligns with entry\\n- Spike filter passed";
+    const timeOpts = { 
+        timeZone: 'Africa/Nairobi', 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        hour12: false 
+    };
+    const entryTime = new Intl.DateTimeFormat('en-US', timeOpts).format(new Date());
+    
+    const stats = getDigitStats(ticks);
+    
+    let emoji = '⚡';
+    let explanation = '';
+    
+    if (type === 'OVER_4') {
+        emoji = '📈';
+        explanation = 'Strong reversal after LOW digit saturation.\nHIGH digits (5-9) are flooding the market.';
+    } else if (type === 'UNDER_5') {
+        emoji = '📉';
+        explanation = 'Strong reversal after HIGH digit saturation.\nLOW digits (0-4) are flooding the market.';
+    } else if (type === 'EVEN') {
+        emoji = '⚪';
+        explanation = 'EVEN digits showing strong cluster.\nPattern continuation expected.';
+    } else if (type === 'ODD') {
+        emoji = '⭕';
+        explanation = 'ODD digits showing strong cluster.\nPattern continuation expected.';
+    } else if (type === 'RISE') {
+        emoji = '📊';
+        explanation = 'Price trending UPWARD.\nHigher lows and higher highs detected.';
+    } else if (type === 'FALL') {
+        emoji = '📊';
+        explanation = 'Price trending DOWNWARD.\nLower highs and lower lows detected.';
+    }
+    
+    const message = `${emoji} ${type} SIGNAL
+
+📊 Market: ${getMarketName(market)}
+⏰ Time: ${entryTime} EAT
+
+🔢 Last 10 Digits: ${stats.digitsStr}
+📈 High Count (4-9): ${stats.highCount}/10
+📉 Low Count (0-3): ${stats.lowCount}/10
+
+💡 Why this market?
+${explanation}
+
+🎯 CONFIDENCE: ${score.toFixed(0)}%`;
+
+    return message;
+}
+
+/**
+ * Publish signal to Telegram
+ */
+async function publishSignal(signal, ticks) {
+    if (!bot || !chatId) {
+        console.log('[Telegram] Bot not configured. Signal output:\n' + formatSignal(signal, ticks));
+        return;
     }
 
-    const message = `✅ DERIV TICK SIGNAL
-
-Market: ${getMarketName(market)}
-Trade Type: ${type.replace('_', ' ')}
-Basis: ${basis}
-Entry Time: ${entryTime} EAT
-Duration: 1 tick
-Confidence: ${score.toFixed(0)}%
-
-Reason:
-${reason}
-
-Risk: Medium`;
-
-    if (bot && chatId) {
-        bot.sendMessage(chatId, message)
-            .then(() => console.log(`[Telegram] Sent ${type} signal for ${market}`))
-            .catch(err => console.error(`[Telegram] Failed to send message: ${err.message}`));
-    } else {
-        // If not configured, just console log it clearly
-        console.log(`\\n\\n=========== SIGNAL SUPPRESSED (NO BOT CONFIG) ===========\\n${message}\\n=========================================================\\n\\n`);
+    try {
+        // Delete old messages first
+        await deleteOldMessages();
+        
+        const messageText = formatSignal(signal, ticks);
+        
+        const sentMessage = await bot.sendMessage(chatId, messageText, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        });
+        
+        signalHistory.messageIds.push(sentMessage.message_id);
+        
+        console.log(`[Telegram] ✅ Signal sent successfully (Message ID: ${sentMessage.message_id})`);
+    } catch (err) {
+        console.error(`[Telegram] ❌ Failed to send message: ${err.message}`);
+        if (err.response && err.response.statusCode === 404) {
+            console.error('[Telegram] 404 Error - Check TELEGRAM_CHAT_ID format (should be number or -100xxxxx for channels)');
+        }
     }
 }
 
 module.exports = {
-    publishSignal
+    publishSignal,
+    getMarketName
 };
