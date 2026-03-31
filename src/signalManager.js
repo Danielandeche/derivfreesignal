@@ -24,6 +24,7 @@ class SignalManager {
      */
     async sendSignalBatch(signals, batchNumber = 1) {
         if (!this.bot || !this.chatId) {
+            console.warn('[SignalManager] ⚠️  Bot not configured. Console output:');
             this.consoleOutput(this.formatBatch(signals, batchNumber));
             return;
         }
@@ -32,9 +33,35 @@ class SignalManager {
             const message = this.formatBatch(signals, batchNumber);
             const sent = await this.bot.sendMessage(this.chatId, message, { parse_mode: 'HTML' });
             this.messageIds.set(`batch_${batchNumber}`, sent.message_id);
-            console.log(`[SignalManager] ✅ Signal batch sent (${signals.length} markets)`);
+            console.log(`[SignalManager] ✅ Signal batch sent to chat ${this.chatId} (${signals.length} markets)`);
         } catch (err) {
             console.error(`[SignalManager] ❌ Failed to send batch: ${err.message}`);
+            if (err.message.includes('404')) {
+                console.error(`
+[SignalManager] TELEGRAM ERROR: 404 Not Found
+This means your TELEGRAM_CHAT_ID is wrong!
+
+How to fix:
+1. Add this bot to get your chat ID: @userinfobot
+   - Type: /start
+   - It will show your ID (e.g., 123456789)
+
+2. If using a GROUP or CHANNEL:
+   - Add the bot to the group first
+   - Send any message in the group
+   - Use: @userinfobot -> /my_id
+   - It will show the group ID (format: -100XXXXXXXXX)
+
+3. Update your .env file:
+   TELEGRAM_CHAT_ID=your_id_here
+
+4. Restart: npm start
+
+Current chatId in .env: ${this.chatId}
+`);
+            }
+            console.log(`[SignalManager] 📝 Signal output to console instead:`);
+            this.consoleOutput(this.formatBatch(signals, batchNumber));
         }
     }
 
@@ -52,7 +79,11 @@ class SignalManager {
             await this.bot.sendMessage(this.chatId, message, { parse_mode: 'HTML' });
             console.log(`[SignalManager] ✅ Expiry notice sent`);
         } catch (err) {
-            console.error(`[SignalManager] ❌ Failed to send expiry: ${err.message}`);
+            if (err.message.includes('404')) {
+                console.error(`[SignalManager] ❌ Expiry failed: Invalid TELEGRAM_CHAT_ID (${this.chatId})`);
+            } else {
+                console.error(`[SignalManager] ❌ Failed to send expiry: ${err.message}`);
+            }
         }
     }
 
@@ -70,7 +101,11 @@ class SignalManager {
             await this.bot.sendMessage(this.chatId, message, { parse_mode: 'HTML' });
             console.log(`[SignalManager] ✅ Countdown notice sent`);
         } catch (err) {
-            console.error(`[SignalManager] ❌ Failed to send countdown: ${err.message}`);
+            if (err.message.includes('404')) {
+                console.error(`[SignalManager] ❌ Countdown failed: Invalid TELEGRAM_CHAT_ID (${this.chatId})`);
+            } else {
+                console.error(`[SignalManager] ❌ Failed to send countdown: ${err.message}`);
+            }
         }
     }
 
