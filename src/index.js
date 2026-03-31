@@ -45,17 +45,55 @@ try {
 
     // Wait 90 seconds for initial tick collection, then start
     console.log('[Startup] ⏳ Waiting 90 seconds for tick collection before first cycle...');
+    console.log('[DEBUG] Setting up 90-second timeout NOW');
     
-    const startTimeout = setTimeout(() => {
-        console.log('\n[System] ✅ Initial tick collection complete. Starting signal cycles...\n');
+    const startTimeout = setTimeout(async () => {
+        console.log('\n[System] ✅ 90 SECOND TIMER FIRED - Starting cycles now!\n');
+        
+        // Verify ticks are available before running cycle
+        let attempts = 0;
+        let hasEnoughTicks = false;
+        
+        while (attempts < 30 && !hasEnoughTicks) {
+            const marketTicks = getMarketTicks();
+            const r10Ticks = marketTicks.R_10 || [];
+            
+            if (r10Ticks.length >= 25) {
+                hasEnoughTicks = true;
+                console.log(`[System] ✅ Ticks ready: ${r10Ticks.length} ticks collected`);
+            } else {
+                attempts++;
+                if (attempts % 5 === 0) {
+                    console.log(`[System] Waiting for ticks... (${r10Ticks.length}/25) - Attempt ${attempts}`);
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            }
+        }
+        
+        if (!hasEnoughTicks) {
+            console.warn('[System] ⚠️  Timed out waiting for ticks. Starting cycle anyway...');
+        }
         
         // Run first cycle immediately
         console.log('[System] Running first cycle immediately...');
-        runAnalysisCycle();
+        try {
+            runAnalysisCycle().catch(err => {
+                console.error('[CYCLE ERROR] First cycle failed:', err.message);
+                console.error(err.stack);
+            });
+        } catch (err) {
+            console.error('[CYCLE ERROR] Sync error in first cycle:', err.message);
+            console.error(err.stack);
+        }
         
         // Then repeat every 10 minutes
         console.log('[System] Setting up recurring cycles every 10 minutes...');
-        setInterval(runAnalysisCycle, SIGNAL_CYCLE);
+        setInterval(() => {
+            runAnalysisCycle().catch(err => {
+                console.error('[CYCLE ERROR] Recurring cycle failed:', err.message);
+                console.error(err.stack);
+            });
+        }, SIGNAL_CYCLE);
         
         // Schedule expiry notice (after 2 minutes of each cycle)
         setInterval(() => {
@@ -68,6 +106,8 @@ try {
         }, SIGNAL_CYCLE + (SIGNAL_CYCLE - 60000));
         
     }, 90000);
+    
+    console.log('[DEBUG] 90-second timeout is now pending. Bot is ready and waiting...');
 
     /**
      * Main Analysis Cycle - Runs every 10 minutes
