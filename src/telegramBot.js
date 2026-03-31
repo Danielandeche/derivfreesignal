@@ -11,46 +11,30 @@ if (token) {
 
 const chatId = process.env.TELEGRAM_CHAT_ID;
 
-// Track message history for deletion
-const signalHistory = {
-    messageIds: [],
-    maxHistory: 2, // Keep only last message visible
-};
+// Track message IDs for editing/deleting
+const signalMessages = new Map(); // market -> message ID
 
 /**
  * Format Market Name
  */
 function getMarketName(symbol) {
     const map = {
-        'R_10': 'Volatility 10 Index',
-        'R_25': 'Volatility 25 Index',
-        'R_50': 'Volatility 50 Index',
-        'R_75': 'Volatility 75 Index',
-        'R_100': 'Volatility 100 Index',
+        'R_10': 'Volatility 10',
+        'R_25': 'Volatility 25',
+        'R_50': 'Volatility 50',
+        'R_75': 'Volatility 75',
+        'R_100': 'Volatility 100',
+        'R_10_1s': 'Volatility 10 (1s)',
+        'R_25_1s': 'Volatility 25 (1s)',
+        'R_50_1s': 'Volatility 50 (1s)',
+        'R_75_1s': 'Volatility 75 (1s)',
+        'R_100_1s': 'Volatility 100 (1s)',
     };
     return map[symbol] || symbol;
 }
 
 /**
- * Delete old messages (keep only last message visible)
- */
-async function deleteOldMessages() {
-    if (signalHistory.messageIds.length >= signalHistory.maxHistory) {
-        const oldMessageId = signalHistory.messageIds.shift();
-        
-        if (bot && chatId) {
-            try {
-                await bot.deleteMessage(chatId, oldMessageId);
-                console.log(`[Telegram] Deleted old message: ${oldMessageId}`);
-            } catch (err) {
-                console.warn(`[Telegram] Could not delete message ${oldMessageId}: ${err.message}`);
-            }
-        }
-    }
-}
-
-/**
- * Get last 10 digits and count for display
+ * Get digit statistics
  */
 function getDigitStats(ticks) {
     const digits = ticks.map(t => parseInt(String(t.quote).split('').pop()));
@@ -64,10 +48,10 @@ function getDigitStats(ticks) {
 }
 
 /**
- * Format detailed signal message
+ * Format signal with all 6 strategies ranked
  */
-function formatSignal(signal, ticks) {
-    const { market, type, score } = signal;
+function formatSignal(signalData, ticks) {
+    const { market, bestSignal, allScores } = signalData;
     
     const timeOpts = { 
         timeZone: 'Africa/Nairobi', 
@@ -80,78 +64,124 @@ function formatSignal(signal, ticks) {
     
     const stats = getDigitStats(ticks);
     
-    let emoji = '⚡';
-    let explanation = '';
+    // Rank all strategies by score
+    const ranked = Object.entries(allScores)
+        .sort((a, b) => b[1] - a[1])
+        .map((entry, idx) => {
+            const strategy = entry[0];
+            const score = entry[1];
+            const emoji = idx === 0 ? '🔥' : idx === 1 ? '⬆️' : idx === 2 ? '➡️' : '  ';
+            return `${emoji} ${strategy.padEnd(10)} ${score.toFixed(0).padStart(3)}%`;
+        });
     
-    if (type === 'OVER_4') {
-        emoji = '📈';
-        explanation = 'Strong reversal after LOW digit saturation.\nHIGH digits (5-9) are flooding the market.';
-    } else if (type === 'UNDER_5') {
-        emoji = '📉';
-        explanation = 'Strong reversal after HIGH digit saturation.\nLOW digits (0-4) are flooding the market.';
-    } else if (type === 'EVEN') {
-        emoji = '⚪';
-        explanation = 'EVEN digits showing strong cluster.\nPattern continuation expected.';
-    } else if (type === 'ODD') {
-        emoji = '⭕';
-        explanation = 'ODD digits showing strong cluster.\nPattern continuation expected.';
-    } else if (type === 'RISE') {
-        emoji = '📊';
-        explanation = 'Price trending UPWARD.\nHigher lows and higher highs detected.';
-    } else if (type === 'FALL') {
-        emoji = '📊';
-        explanation = 'Price trending DOWNWARD.\nLower highs and lower lows detected.';
-    }
+    let emoji = '📊';
+    if (bestSignal.type === 'OVER_4') emoji = '📈';
+    else if (bestSignal.type === 'UNDER_5') emoji = '📉';
+    else if (bestSignal.type === 'EVEN') emoji = '⚪';
+    else if (bestSignal.type === 'ODD') emoji = '⭕';
+    else if (bestSignal.type === 'RISE') emoji = '⬆️';
+    else if (bestSignal.type === 'FALL') emoji = '⬇️';
     
-    const message = `${emoji} ${type} SIGNAL
+    const message = `${emoji} <b>SIGNAL ALERT</b> 🎯
 
-📊 Market: ${getMarketName(market)}
-⏰ Time: ${entryTime} EAT
+<b>Market:</b> ${getMarketName(market)}
+<b>Best Strategy:</b> <u>${bestSignal.type}</u>
+<b>Confidence:</b> <b>${bestSignal.score.toFixed(0)}%</b>
+<b>Time:</b> ${entryTime} EAT
 
-🔢 Last 10 Digits: ${stats.digitsStr}
-📈 High Count (4-9): ${stats.highCount}/10
-📉 Low Count (0-3): ${stats.lowCount}/10
+<b>📊 All Strategies (Ranked):</b>
+<code>
+${ranked.join('\n')}
+</code>
 
-💡 Why this market?
-${explanation}
+<b>📈 Last 10 Digits:</b> <code>${stats.digitsStr}</code>
+<b>High (4-9):</b> ${stats.highCount}/10 | <b>Low (0-3):</b> ${stats.lowCount}/10
 
-🎯 CONFIDENCE: ${score.toFixed(0)}%`;
+<b>⏱️ Signal Valid For: 2 Minutes</b>`;
 
     return message;
 }
 
 /**
- * Publish signal to Telegram
+ * Send main signal to Telegram
  */
-async function publishSignal(signal, ticks) {
+async function publishSignal(signalData, ticks) {
     if (!bot || !chatId) {
-        console.log('[Telegram] Bot not configured. Signal output:\n' + formatSignal(signal, ticks));
+        console.log('[Telegram] Signal output:\n' + formatSignal(signalData, ticks));
         return;
     }
 
     try {
-        // Delete old messages first
-        await deleteOldMessages();
-        
-        const messageText = formatSignal(signal, ticks);
+        const messageText = formatSignal(signalData, ticks);
         
         const sentMessage = await bot.sendMessage(chatId, messageText, {
             parse_mode: 'HTML',
             disable_web_page_preview: true
         });
         
-        signalHistory.messageIds.push(sentMessage.message_id);
-        
-        console.log(`[Telegram] ✅ Signal sent successfully (Message ID: ${sentMessage.message_id})`);
+        signalMessages.set(signalData.market, sentMessage.message_id);
+        console.log(`[Telegram] ✅ Signal sent for ${signalData.market}`);
     } catch (err) {
-        console.error(`[Telegram] ❌ Failed to send message: ${err.message}`);
-        if (err.response && err.response.statusCode === 404) {
-            console.error('[Telegram] 404 Error - Check TELEGRAM_CHAT_ID format (should be number or -100xxxxx for channels)');
-        }
+        console.error(`[Telegram] ❌ Failed to send signal: ${err.message}`);
+    }
+}
+
+/**
+ * Send expiry notice
+ */
+async function publishExpiryNotice() {
+    if (!bot || !chatId) {
+        console.log('[Telegram] Expiry notice: Signals expired. Next signal in 10 minutes.');
+        return;
+    }
+
+    try {
+        const message = `⏰ <b>SIGNALS EXPIRED</b> ⏰
+
+The 2-minute signals have expired.
+
+<b>⏱️ Next Signal In: 10 Minutes</b>
+🔔 Stay tuned for the next round of analysis!`;
+        
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'HTML'
+        });
+        
+        console.log(`[Telegram] ✅ Expiry notice sent`);
+    } catch (err) {
+        console.error(`[Telegram] ❌ Failed to send expiry notice: ${err.message}`);
+    }
+}
+
+/**
+ * Send countdown notice (1 minute before signal)
+ */
+async function publishCountdownNotice() {
+    if (!bot || !chatId) {
+        console.log('[Telegram] Countdown: Signal coming in 1 minute');
+        return;
+    }
+
+    try {
+        const message = `🔔 <b>SIGNAL INCOMING</b> 🔔
+
+<b>⏱️ New signals coming in 1 minute!</b>
+
+Get ready for fresh market analysis...`;
+        
+        await bot.sendMessage(chatId, message, {
+            parse_mode: 'HTML'
+        });
+        
+        console.log(`[Telegram] ✅ Countdown notice sent`);
+    } catch (err) {
+        console.error(`[Telegram] ❌ Failed to send countdown notice: ${err.message}`);
     }
 }
 
 module.exports = {
     publishSignal,
+    publishExpiryNotice,
+    publishCountdownNotice,
     getMarketName
 };

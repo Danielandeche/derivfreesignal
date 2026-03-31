@@ -1,100 +1,153 @@
+/**
+ * COMPLETELY REDESIGNED BOT - From Ground Up
+ * Professional Deriv Signal System with Advanced Analysis
+ */
+
 require('dotenv').config();
+
 const { initDerivScanner, getMarketTicks, getActiveMarkets } = require('./derivScanner');
-const { evaluateAll } = require('./scoringEngine');
-const { publishSignal } = require('./telegramBot');
+const { analyzeAllSignals } = require('./analysisEngine');
+const Scheduler = require('./scheduler');
+const SignalManager = require('./signalManager');
 
-const INTERVAL_MS = parseInt(process.env.EVALUATION_INTERVAL_MS || 300000, 10); // 5 minutes default
-const MIN_CONFIDENCE_SCORE = 80; // High confidence threshold for quality signals
+// Configuration
+const SIGNAL_CYCLE = 10 * 60 * 1000; // 10 minutes
+const SIGNAL_DURATION = 2 * 60 * 1000; // 2 minutes
+const MIN_CONFIDENCE = 75; // 75% confidence threshold
 
-console.log('===================================================');
-console.log('   Starting Deriv Tick-Based Telegram Bot   ');
-console.log(`   Evaluation Interval: ${INTERVAL_MS / 1000 / 60} minutes`);
-console.log(`   Confidence Threshold: ${MIN_CONFIDENCE_SCORE}%`);
-console.log('===================================================');
+console.log(`
+╔${'═'.repeat(58)}╗
+║  🚀 DERIV AUTOMATED SIGNAL SYSTEM - REDESIGNED 🚀        ║
+║                                                          ║
+║  Strategy: Advanced Price Action Analysis              ║
+║  Markets: 5 Volatility Indices (Deriv)                 ║
+║  Signals: Every 10 minutes                             ║
+║  Duration: 2 minutes per signal                        ║
+║  Methods: BREAKOUT | REVERSION | VOLATILITY |          ║
+║           CONSOLIDATION | TREND | REVERSAL             ║
+╚${'═'.repeat(58)}╝`);
 
-// 1. Start capturing ticks
+// Initialize
+const scheduler = new Scheduler();
+const signalManager = new SignalManager();
+let cycleNumber = 0;
+
+// Start market scanner
 initDerivScanner();
 
-// 2. Setup the loop
-setInterval(evaluateMarketCycle, INTERVAL_MS);
-
-// Run first evaluation after enough ticks are collected (~60-90 seconds for WebSocket to receive data)
-setTimeout(evaluateMarketCycle, 90000);
+// Wait 90 seconds for initial tick collection, then start
+setTimeout(() => {
+    console.log('\n[System] Initial tick collection complete. Starting signal cycles...\n');
+    
+    // Run first cycle immediately
+    runAnalysisCycle();
+    
+    // Then repeat every 10 minutes
+    scheduler.scheduleRepeating('main-analysis', SIGNAL_CYCLE, runAnalysisCycle);
+    
+    // Schedule expiry notice (at 2-minute mark of each cycle)
+    scheduler.scheduleRelative('expiry-notice', SIGNAL_CYCLE, SIGNAL_DURATION, () => {
+        signalManager.sendExpiryNotice();
+    });
+    
+    // Schedule countdown notice (at 9-minute mark - 1 minute before next signal)
+    scheduler.scheduleRelative('countdown-notice', SIGNAL_CYCLE, SIGNAL_CYCLE - 60000, () => {
+        signalManager.sendCountdownNotice();
+    });
+}, 90000);
 
 /**
- * Runs every X minutes. Scans 25 ticks of all markets, applies all 6 strategies,
- * finds the highest confidence score. If it exceeds threshold, publishes to Telegram.
+ * Main Analysis Cycle - Runs every 10 minutes
  */
-function evaluateMarketCycle() {
-    console.log(`\n[Core] Running Evaluation Cycle... (${new Date().toLocaleString()})`);
+async function runAnalysisCycle() {
+    cycleNumber++;
+    const cycleStart = Date.now();
+    
+    console.log(`\n${'═'.repeat(70)}`);
+    console.log(`[CYCLE #${cycleNumber}] Started at ${new Date().toLocaleTimeString()}`);
+    console.log(`${'═'.repeat(70)}`);
+
     const marketTicks = getMarketTicks();
     const activeMarkets = getActiveMarkets();
+    
+    const signals = [];
+    let analyzed = 0;
+    let qualified = 0;
 
-    let bestSignal = null;
-    let bestTicks = null;
-    let highestScore = 0;
-    let hasEnoughTicks = false;
-
+    // Analyze each market with statistical methods
     activeMarkets.forEach(market => {
         const ticks = marketTicks[market];
 
-        // Wait until we have a full window of 25 ticks
         if (!ticks || ticks.length < 25) {
-            console.log(`  - [${market}] Skipping: Insufficient ticks (${ticks ? ticks.length : 0}/25)`);
+            console.log(`  ⏳ [${market.padEnd(8)}] Insufficient ticks (${ticks?.length || 0}/25)`);
             return;
         }
-        
-        hasEnoughTicks = true;
 
-        // Apply all 6 scoring strategies
-        const scores = evaluateAll(ticks);
-        
-        // Find best strategy in this market
-        let marketBestType = null;
-        let marketBestScore = 0;
+        analyzed++;
 
-        for (const [strategy, score] of Object.entries(scores)) {
-            if (score > marketBestScore) {
-                marketBestScore = score;
-                marketBestType = strategy;
+        // Get all 6 signal types using new analysis engine
+        const allScores = analyzeAllSignals(ticks);
+        
+        // Find best signal
+        let bestSignal = null;
+        let bestScore = 0;
+        
+        for (const [signalType, score] of Object.entries(allScores)) {
+            if (score > bestScore) {
+                bestScore = score;
+                bestSignal = signalType;
             }
         }
 
-        console.log(`  - [${market}] Best: ${marketBestType} (${marketBestScore.toFixed(0)}%)`);
+        // Format scores for display
+        const scored = Object.entries(allScores)
+            .sort((a, b) => b[1] - a[1])
+            .map(e => `${e[0]}:${parseInt(e[1])}%`)
+            .join(' | ');
 
-        // Compare against global best
-        if (marketBestScore > highestScore) {
-            highestScore = marketBestScore;
-            bestSignal = {
-                market: market,
-                type: marketBestType,
-                score: highestScore
-            };
-            bestTicks = ticks;
+        console.log(`  ✅ [${market.padEnd(8)}] ${bestSignal.padEnd(14)} ${parseInt(bestScore).toString().padStart(3)}% | ${scored}`);
+
+        // Qualified signal (above threshold)
+        if (bestScore >= MIN_CONFIDENCE) {
+            signals.push({
+                market,
+                best: { signal: bestSignal, score: bestScore },
+                allScores,
+                timestamp: new Date(),
+                ticks
+            });
+            qualified++;
         }
     });
 
-    console.log('---------------------------------------------------');
-    
-    if (!hasEnoughTicks) {
-        console.log(`[Core] ⏳ Waiting for ticks... (Minimum 25 required per market)`);
-        return;
-    }
-    
-    if (highestScore >= MIN_CONFIDENCE_SCORE && bestSignal) {
-        console.log(`[Core] 🚀 WINNER FOUND: ${bestSignal.market} -> ${bestSignal.type} (${highestScore.toFixed(0)}%)! Publishing...`);
-        publishSignal(bestSignal, bestTicks);
-    } else if (highestScore > 0) {
-        console.log(`[Core] 📉 Top score was ${highestScore.toFixed(0)}%. Below ${MIN_CONFIDENCE_SCORE}% threshold. Skipping this cycle.`);
+    console.log(`${'─'.repeat(70)}`);
+    console.log(`[Analysis] Analyzed: ${analyzed}/5 | Qualified: ${qualified} (>${MIN_CONFIDENCE}%)`);
+    console.log(`${'─'.repeat(70)}`);
+
+    // Send signals to Telegram
+    if (signals.length > 0) {
+        await signalManager.sendSignalBatch(signals, cycleNumber);
+        console.log(`\n✅ Published ${signals.length} signals to Telegram group\n`);
     } else {
-        console.log(`[Core] ⏳ No viable signals generated. Waiting for next cycle.`);
+        console.log(`\n⚠️  No signals qualified. Waiting for next cycle...\n`);
     }
+
+    const cycleEnd = Date.now();
+    console.log(`[Cycle Complete] Duration: ${(cycleEnd - cycleStart)}ms`);
+    console.log(`[Next Cycle] In 10 minutes\n`);
 }
 
-// Keep the process alive and handle unhandled exceptions cleanly
-process.on('uncaughtException', (err) => {
-    console.error('[CRITICAL ERROR] Uncaught Exception:', err);
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('\n\n[System] Shutting down gracefully...');
+    scheduler.clearAll();
+    process.exit(0);
 });
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('[CRITICAL ERROR] Unhandled Rejection at:', promise, 'reason:', reason);
+
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL ERROR]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('[UNHANDLED REJECTION]', reason);
 });

@@ -1,8 +1,13 @@
 const WebSocket = require('ws');
 
+// 13 Volatility Markets for Deriv
+const TARGET_MARKETS = [
+    'R_10', 'R_25', 'R_50', 'R_75', 'R_100',  // Standard volatility indices
+    'R_10_1s', 'R_25_1s', 'R_50_1s', 'R_75_1s', 'R_100_1s'  // 1-second variants
+];
+
 // Maps symbol to an array of recent ticks
 const marketTicks = {};
-const TARGET_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100'];
 
 // Initialize empty arrays
 TARGET_MARKETS.forEach(market => {
